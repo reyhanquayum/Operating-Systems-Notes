@@ -1,0 +1,667 @@
+Class 6
+CS 202
+09/20/2023
+
+1. Last time
+2. Managing concurrency
+3. Mutexes
+4. Condition Variables
+5. Semaphores
+6. Monitors and standards
+7. Advice
+8. Practice with concurrent programming
+
+--------------------------------------------------------------------------
+
+1. Last time
+    
+    - Threads
+    - Intro to concurrency
+
+2. Managing concurrency
+
+    * critical sections
+    * protecting critical sections
+    * implementing critical sections
+
+    --step 1: the concept of *critical sections*
+
+        --Regard accesses of shared variables (for example, "count" in
+        the bounded buffer example) as being in a _critical section_
+
+        --Critical sections will be protected from concurrent execution
+
+	--Now we need a solution to _critical section_ problem
+
+	--Solution must satisfy 3 properties:
+
+	    1. mutual exclusion
+		only one thread can be in c.s. at a time		
+                [this is the notion of atomicity]
+
+	    2. progress
+		if no threads executing in c.s., one of the threads
+		trying to enter a given c.s. will eventually get in
+		
+	    3. bounded waiting
+		once a thread T starts trying to enter the critical
+		section, there is a bound on the number of other threads
+		that may enter the critical section before T enters
+
+	--Note progress vs. bounded waiting 
+
+	    --If no thread can enter C.S., don't have progress 
+
+	    --If thread A waiting to enter C.S. while B repeatedly
+	    leaves and re-enters C.S. ad infinitum, don't have bounded
+	    waiting 
+
+        --We will be mostly concerned with mutual exclusion (in fact,
+        real-world synchronization/concurrency primitives often don't
+        satisfy bounded waiting.)
+
+    --step 2: protecting critical sections. 
+
+        --want lock()/unlock() or enter()/leave() or acquire()/release()
+
+	    --lots of names for the same idea
+
+	    --mutex_init(mutex_t* m), mutex_lock(mutex_t* m),
+	    mutex_unlock(mutex_t* m),....
+
+	    --pthread_mutex_init(), pthread_mutex_lock(), ...
+
+	--in each case, the semantics are that once the thread of
+	execution is executing inside the critical section, no other
+	thread of execution is executing there
+
+    --step 3: implementing critical sections
+
+        --"easy" way, assuming a uniprocessor machine: 
+
+            enter() --> disable interrupts
+            leave() --> reenable interrupts
+
+            [convince yourself that this provides mutual exclusion]
+
+        --we will study other implementations later. for now, focus
+        on the use
+
+
+3. Mutexes
+
+    --using critical sections
+        
+        --linked list example
+
+        --bounded buffer example
+
+    --why are we doing this?
+
+        --because *atomicity* is required if you want to reason about
+        code without contorting your brain to reason about all possible
+        interleavings
+
+        --atomicity requires mutual exclusion aka a solution to critical
+        sections
+
+        --mutexes provide that solution
+
+        --once you have mutexes, don't have to worry about arbitrary
+        interleavings. critical sections are interleaved, but those are
+        much easier to reason about than individual operations.
+
+        --why? because of _invariants_.
+
+            examples of invariants:
+
+            "list structure has integrity"
+
+            "'count' reflects the number of entries in the buffer"
+
+        the meaning of lock.acquire() is that if and only if you get
+        past that line, it's safe to violate the invariants.
+
+        the meaning of lock.release() is that right _before_ that line,
+        any invariants need to be restored.
+
+        the above is abstract.
+
+        let's make it concrete:
+
+            invariant: "list structure has integrity"
+
+            so protect the list with a mutex
+
+            only after acquire() is it safe to manipulate the list
+
+    --by the way, why aren't we worried about *processes* trashing each
+    other's memory? (because the OS, with the help of the hardware,
+    arranges for two different processes to have isolated memory space.
+    such isolation is one of the uses of virtual memory, which we will
+    study in a few weeks.) 
+
+
+4. Condition variables
+
+    A. Motivation
+
+        --producer/consumer queue 
+
+	    --very common paradigm. also called "bounded buffer":
+
+	        --producer puts things into a shared buffer
+	        --consumer takes them out
+	        --producer must wait if buffer is full; consumer must
+	          wait if buffer is empty
+	        --shows up everywhere
+		    --Soda machine: producer is delivery person, consumer
+		        is soda drinkers, shared buffer is the machine
+		    --OS implementation of pipe()
+		    --DMA buffers
+                
+	--producer/consumer queue using mutexes (see handout04, 2a)
+
+	    --what's the problem with that?
+
+	    --answer: a form of *busy waiting* 
+
+	--It is convenient to break synchronization into two types:
+
+	    --*mutual exclusion*: allow only one thread to access a given
+	    set of shared state at a time
+
+	    --*scheduling constraints*: wait for some other thread to do
+	    something (finish a job, produce work, consume work, accept
+	    a connection, get bytes off the disk, etc.)
+
+
+    B. Usage
+
+	--API
+
+	    --void cond_init (Cond *, ...); 
+		--Initialize
+
+	    --void cond_wait(Cond *c, Mutex* m);
+		--Atomically unlock m and sleep until c signaled 
+		--Then re-acquire m and resume executing 
+
+	    --void cond_signal(Cond* c);
+		--Wake one thread waiting on c
+
+		[in some pthreads implementations, the analogous
+		call wakes *at least* one thread waiting on c. Check the
+		the documentation (or source code) to be sure of the
+		semantics. But, actually, your implementation shouldn't
+		change since you need to be prepared to be "woken" at
+		any time, not just when another thread calls signal().
+		More on this below.]
+
+	    --void cond_broadcast(Cond* c);
+		--Wake all threads waiting on c
+
+    C. Important points
+
+        (1) We MUST use "while", not "if". Why?
+
+	    --Because we can get an interleaving like this:
+
+	        --The signal() puts the waiting thread on the ready list
+	        but doesn't run it
+
+	        --That now-ready thread is ready to acquire() the mutex
+	        (inside cond_wait()).
+
+	        --But a *different* thread (a third thread: not the
+	        signaler, not the now-ready thread) could acquire() the
+	        mutex, work in the critical section, and now invalidates
+	        whatever condition was being checked
+
+	        --Our now-ready thread eventually acquire()s the
+	        mutex...
+
+	        --...with no guarantees that the condition it was
+	        waiting for is still true
+	        
+	    --Solution is to use "while" when waiting on a condition
+	    variable
+
+	    --DO NOT VIOLATE THIS RULE; doing so will (almost always)
+	    lead to incorrect code
+
+            --NOTE: NOTE: NOTE: There are two ways to understand
+            while-versus-if:
+            (a) It's the 'while' condition that actually guards the program.
+            (b) There's simply no guarantee when the thread comes out of
+            wait that the condition holds. 
+        
+        (2) cond_wait releases the mutexes and goes into the waiting
+        state in one function call (see panel 2b of handout 04). 
+
+            --QUESTION: Why?
+
+	    --Answer: can get stuck waiting.
+
+	        Producer: while (count == BUFFER_SIZE)
+	        Producer: release()
+	        Consumer: acquire()
+	        Consumer: .....
+	        Consumer: cond_signal(&nonfull)
+	        Producer: cond_wait(&nonfull)
+
+	    --Producer will never hear the signal!
+
+5. Semaphores
+
+    --Advice: don't use these. We're mentioning them only for
+    completeness and for historical reasons: they were the first
+    general-purpose synchronization primitive, and they were the first
+    synchronization primitive that Unix supported.
+
+    --Introduced by Edsger Dijkstra in late 1960s
+    
+    --Semaphore is initialized with an integer, N
+
+    --Two functions:
+	--Down() and Up() [also known as P() and V()]
+	--The guarantee is that Down() will return only N more times
+	than Up() is called
+	--Basically a counter that, when it reaches 0, causes a thread
+	to sleep
+
+    --Another way to say the same thing:
+	--Semaphore holds a count
+	--Down() is an atomic operation that waits for the count to
+	become positive; it then decrements the count by 1
+	--Up() is an atomic operation that increments the count by 1 and
+	then wakes up a thread waiting on Down(), if any
+
+    --Reasons we recommend against their use:
+	--semaphores are dual-purpose (for mutual exclusion and
+	scheduling constraints), so hard to read code and hard to get
+	code right
+	--semaphores have hidden internal state
+	--getting a program right requires careful interleaving of
+	"synchronization" and "mutex" semaphores
+    
+    --(In this class, we require you to use condition variables and
+    mutexes; semaphores will be considered incorrect.)
+
+6. Monitors and standards
+
+    Monitors = mutex + condition variables
+
+    --High-level idea: an object (as in object-oriented systems)
+	
+	--in which methods do not execute concurrently; and
+
+	--that has one or more condition variables
+
+    --More detail
+    
+	--Every method call starts with acquire(&mutex), and ends with
+	release(&mutex)
+
+	--Technically, these acquire()/release() are invisible to the
+	programmer because it is the programming language (i.e., the
+	compiler+run-time) that is implementing the monitor
+
+	    --So, technically, a monitor is a programming language
+	    concept
+
+	    --But technical definition isn't hugely useful because no
+	    programming languages in widespread usage have true monitors
+
+	    --Java has something close: a class in which every method is
+	    set by the programmer to be "synchronized" (i.e., implicitly
+	    protected by a mutex)
+
+		--Not exactly a monitor because there's nothing forcing
+		every method to be synchronized
+
+	    --And we can *use* mutexes and condition variables to
+	    implement our own manual versions of monitors, though we
+	    have to be careful
+	
+	--Given the above, we are going to use the term "monitor" more
+	loosely to refer to both the technical definition and also a
+	"manually constructed" monitor, wherein:
+	
+	    --all method calls are protected by a mutex (that is, the
+	    programmer inserts those acquire()/release() on entry and
+	    exit from every procedure *inside* the object)
+	    
+	    --synchronization happens with condition variables whose
+	    associated mutex is the mutex that protects the method calls
+
+	--In other words, we will use the term "monitor" to refer to the
+	programming conventions that you should follow when building
+	multithreaded applications
+
+	    --you must follow these conventions on lab 3
+
+    --Example: see handout05, item 1
+
+    --Different styles of monitors:
+
+	--Hoare-style: signal() immediately wakes the waiter
+
+	--Hansen-style and what we will use:
+	signal() eventually wakes the waiter. Not an immediate transfer
+
+
+    B. Standards: why?
+
+        --Mike Dahlin stands on the desk when proclaiming the standards
+
+        --see Mike D's "Programming With Threads", linked from lab 3
+
+	    --You are required to follow this document
+
+	    --You will lose points (potentially many!) on the lab and on
+	    the exam if you stray from these standards
+
+	    --Note that in his example in section 4, there needs to be
+	    another line:
+
+		--right before mutex->release(), he should have:
+		    assert(invariants hold)
+
+       --the primitives may seem strange, and the rules may seem
+	arbitrary: why one thing and not another?
+
+	    --there is no absolute answer here
+
+	    --**However**, history has tested the approach that we're
+	    using. If you use the recommended primitives and follow
+	    their suggested use, you will find it easier to write
+	    correct code
+
+	--For now, take the recommended approaches as a given,
+	and use them for a while. If you can come up with something
+	better after that, by all means do so!
+
+	--But please remember three things:
+	
+	    a. lots of really smart people have thought really hard
+	    about the right abstractions, so a day or two of
+	    thinking about a new one or a new use is unlikely to
+	    yield an advance over the best practices.
+
+	    b. the consequences of getting code wrong can be
+	    atrocious. see for example:
+	    
+		http://www.nytimes.com/2010/01/24/health/24radiation.html
+		http://sunnyday.mit.edu/papers/therac.pdf
+		http://en.wikipedia.org/wiki/Therac-25
+
+	    c. people who tend to be confident about their abilities
+	    tend to perform *worse*, so if you are confident you are
+	    a Threading and Concurrency Ninja and/or you think you
+	    truly understand how these things work, then you may
+	    wish to reevaluate.....
+
+		--Dunning-Kruger effect
+		--http://www.nytimes.com/2000/01/23/weekinreview/january-16-22-i-m-no-doofus-i-m-a-genius.html
+
+    C. The Commandments
+
+        --RULE:
+        
+	    --acquire/release at beginning/end of methods
+
+        --RULE:
+
+	    --hold lock when doing condition variable operations
+
+	    --Some people
+	        [for example, Andrew Birrell in this paper:
+                http://www.hpl.hp.com/techreports/Compaq-DEC/SRC-RR-35.pdf ]
+	    will say: "for experts only, no need to
+	    hold the lock when signaling". IGNORE THIS. Putting the signal
+	    outside the lock is only a small performance optimization, and
+	    it is likely to lead you to write incorrect code.
+	    
+	    --to get credit in Lab 3, you must hold the associated mutex
+	    when doing a condition variable operation
+
+        --RULE:
+
+	    --a thread that is in wait() must be prepared to be restarted at
+	    any time, not just when another thread calls "signal()".
+
+	    --why? because the implementor of the threads and condition
+	    variables package *assumes* that the user of the threads package
+	    is doing while(){wait()}.
+
+        --Can we replace SIGNAL with BROADCAST, given our monitor semantics?
+         (Answer: yes, always.) Why?
+
+	    --while() condition tests the needed invariant. program
+	    doesn't progress pass while() unless the needed invariant is
+	    true.
+
+	    --result: spurious wake-ups are acceptable....
+
+	    --...which implies you can always wakeup a thread at any
+	    moment with no loss of correctness....
+
+	    --....which implies you can replace SIGNAL with BROADCAST
+	    [though it may hurt performance to have a bunch of
+	    needlessly awake threads contending for a mutex that they
+	    will then acquire() and release().]
+
+
+        --Can we replace BROADCAST with SIGNAL?
+
+	    --Answer: not always. 
+
+	    --Example:
+	        --memory allocator
+	        --threads allocate and free memory in variable-sized chunks
+	        --if no memory free, wait on a condition variable
+	        --now posit:
+		    --two threads waiting to allocate chunks of memory
+		    --no memory free at all
+		    --then, a third thread frees 10,000 bytes
+	        --SIGNAL alone does the wrong thing: we need to awaken both
+	        threads
+
+
+7. Advice for concurrent programming
+
+    A. Top-level piece of advice: SAFETY FIRST.
+
+	--Locking at coarse grain is easiest to get right, so do
+	that (one big lock for each big object or collection of
+	them)
+	
+	--Don't worry about performance at first
+
+	--In fact, don't even worry about liveness at first
+	
+	    --In other words don't view deadlock as a disaster
+
+	--Key invariant: make sure your program never does the wrong thing
+
+    B. More detailed advice: design approach
+
+	[We will use item #1 on handout as a case study.....]
+
+	--Here's a four-step design approach:
+	
+	    1. Getting started:
+	     
+		 1a. Identify units of concurrency. Make each a thread with
+		 a go() method or main loop. Write down the actions a thread
+		 takes at a high level.  
+		 
+		 1b. Identify shared chunks of state. Make each shared
+		 *thing* an object. Identify the methods on those objects,
+		 which should be the high-level actions made *by* threads
+		 *on* these objects. Plan to have these objects be monitors.
+		 
+		 1c. Write down the high-level main loop of each thread. 
+	     
+	    Advice: stay high level here. Don't worry about synchronization 
+	    yet. Let the objects do the work for you. 
+	     
+	    Separate threads from objects. The code associated with a
+	    thread should not access shared state directly (and so there
+	    should be no access to locks/condition variables in the
+	    "main" procedure for the thread). Shared state and
+	    synchronization should be encapsulated in shared objects. 
+
+	    --QUESTION: how does this apply to the example on the
+	    handout?
+		--separate loops for producer(), consumer(), and
+		synchronization happens inside MyBuffer.
+	     
+	    Now, for each object: 
+	     
+	    2. Write down the synchronization constraints on the
+	    solution. Identify the type of each constraint: mutual
+	    exclusion or scheduling. For scheduling constraints, ask,
+	    "when does a thread wait"?
+
+		--NOTE: usually, the mutual exclusion constraint is
+		satisfied by the fact that we're programming with
+		monitors.
+
+		--QUESTION: how does this apply to the example on the
+		handout?
+		    --Only one thread can manipulate the buffer at a time
+		    (mutual exclusion constraint)
+		    --Producer must wait for consumer to empty slots if all
+		    full (scheduling constraint)
+		    --Consumer must wait for producer to fill slots if all
+		    empty (scheduling constraint)
+
+	    3. Create a lock or condition variable corresponding to each 
+	    constraint 
+
+		--QUESTION: how does this apply to the example on the
+		handout?
+		    --Answer: need a lock and two condition variables.
+		    (lock was sort of a given from the fact of a monitor).
+	     
+	    4. Write the methods, using locks and condition variables for 
+	    coordination  
+	
+
+    C. More advice
+
+	1. Don't manipulate synchronization variables or shared state
+	variables in the code associated with a thread; do it with the
+	code associated with a shared object.  
+      
+	    --Threads tend to have "main" loops. These loops tend to
+	    access shared objects. *However*, the "thread" piece of it
+	    should not include locks or condition variables. Instead,
+	    locks and CVs should be encapsulated in the shared objects.
+
+	    --Why?
+
+		(a) Locks are for synchronizing across multiple threads.
+		Doesn't make sense for one thread to "own" a lock.
+
+		(b) Encapsulation -- details of synchronization are
+		internal details of a shared object. Caller should not
+		know about these details.  "Let the shared objects do
+		the work."
+
+	    --Common confusion: trying to acquire and release locks
+	    inside the threads' code (i.e., not following this advice).
+	    Bad idea! Synchronization should happen within the shared
+	    objects. Mantra: "let the shared objects do the work".
+	
+	    --Note: our first example of condition variables --
+	    handout04, item 2b -- doesn't actually follow the advice, but
+	    that is in part so you can see all of the parts working
+	    together.
+
+	2. Different way to state what's above:
+	
+	    --You want to decompose your problem into objects, as in
+	    object-oriented style of programming.
+
+	    --Thus:
+
+	       (1) Shared object encapsulates code, synchronization 
+		   variables, and state variables 
+
+               (2) Shared objects are separate from threads 
+
+
+8. Practice with concurrent programming
+
+    --sleeping barber question (HW4). use it as practice.
+    
+        side note: (definition of practice when it comes to technical
+        work = trying it on your own WITHOUT looking at the solution.)
+
+    --we guarantee to test concurrent programming in this course
+
+    --today, we work a different example:
+
+	--workers interact with a database
+	    --motivation: banking, airlines, etc.
+
+	--readers never modify database
+
+	--writers read and modify data
+
+	--using only a single mutex lock would be overly restrictive.
+	Instead, want
+	    --many readers at the same time
+	    --only one writer at a time
+
+    --let's follow the concurrency advice .....
+
+	    1. Getting started
+		a. what are units of concurrency? [readers/writers]
+		b. what are shared chunks of state? [database]
+		c. what does the main function look like?
+		    read() 
+			check in -- wait until no writers
+			access DB
+			check out -- wake up waiting writer, if appropriate
+
+		    write()
+			check in -- wait until no readers or writers
+			access DB
+			check out -- wake up waiting readers or writers
+
+	    2. and 3. Synchronization constraints and objects
+
+		--reader can access DB when no writers (condition:
+		okToRead)
+
+		--writer can access DB when no other readers or writers
+		(condition: okToWrite)
+
+		--only one thread manipulates shared variables at a
+		time. NOTE: **this does not mean only one thread in the
+		DB at a time** (mutex)
+
+    
+	    4. write the methods
+
+		--inspiration required:
+		    int AR = 0; // # active readers
+		    int AW = 0; // # active writers
+		    int WR = 0; // # waiting readers
+		    int WW = 0; // # waiting writers
+	
+		--see handout for the code
+
+    --QUESTION: why not just hold the lock all the way through "Execute
+    req"? (Answer: the whole point was to expose more concurrency,
+    i.e., to move away from exclusive access.)
+
+    --QUESTION: what if we had shared locks? The implementation of
+    shared locks is given on the handout
+
+[thanks to David Mazières and Mike Dahlin for content in portions of
+this lecture.]

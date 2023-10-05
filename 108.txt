@@ -1,0 +1,163 @@
+Class 8 
+CS 202
+09/27/2023
+
+On the board
+------------
+
+1. Last time
+2. Performance issues
+3. Programmability issues
+4. Mutexes and interleavings
+
+
+1. Last time
+
+    - implementation of spinlocks
+    - implementation of mutexes (in terms of spinlocks)
+    - deadlock
+    - other problems with lock-based programming
+
+    - today: finish discussing problems of lock-based programming
+
+2. Performance issues and tradeoffs
+
+    (a) Implementation of spinlocks/mutexes can be expensive. Reasons:
+
+        --mutex costs: 
+            --the raw instructions required to execute "mutex_acquire"
+            --going to sleep and waking up implies context switch, which
+            brings a resource cost
+
+        --spinlock costs:
+            --cross-talk among CPUs 
+            --cache line bounces
+            --fairness issues
+        
+            --> this can be mitigated (if you're curious, look up
+            "MCS locks").
+
+    (b) Coarse locks limit available parallelism  ....
+
+        [(still, you should design this way at first!!!)]
+
+	    the fundamental issue with coarse-grained locking is that
+	    only one CPU can execute anywhere in the part of your code
+	    protected by a lock. If your critical section code is called
+	    a lot, this may reduce the performance of an expensive
+	    multiprocessor to that of a single CPU.
+
+	    if this happens inside the kernel, it means that
+	    applications will inherit the performance problems from the
+	    kernel
+
+
+    (c) ... but fine-grained locking leads to complexity and hence bugs
+    (like deadlock)
+
+        --> although finer-grained locking can often lead to better
+        performance, it also leads to increased complexity and hence
+        risk of bugs (including deadlock).
+
+        --> see handout
+
+3. Programmability issues
+
+    Loss of modularity
+
+	--examples above: avoiding deadlock requires understanding
+	how programs call each other.
+
+	--also, need to know, when calling a library, whether it's
+	thread-safe: printf, malloc, etc. If not, surround call with
+	mutex. (Can always surround calls with mutexes conservatively.)
+
+        --basically locks bubble out of the interface
+
+    What's the fundamental problem? The fundamental problem is that the
+    shared memory programming model is hard to use correctly (although
+    mutexes help a great deal). 
+
+4. Mutexes and interleavings 
+
+    Recap the environment:
+
+        --sequential consistency means arbitrary interleavings in
+        program order: this is hard enough, but ...
+        
+        --... modern multi-CPU hardware doesn't give sequential
+        consistency, so the possible interleavings are even worse.
+        
+        [see end of handout06 and also panel 4 on handout03.]
+
+    YET!!! if you use mutexes correctly
+
+        (i) you don't have to worry about arbitrary interleavings
+        (critical sections execute atomically, and interleavings in
+        non-critical sections are okay), and 
+
+        (ii) your program will appear to be running on sequentially
+        consistent hardware (even if it isn't). That is, IF you use
+        mutexes correctly, you don't have to worry about what the
+        hardware is truly doing. 
+
+            --> this is arranged by the threading library
+            (synchronization primitives) and the compiler.
+
+            --> in the spinlock implementation that we studied, the
+            "xchg" does a lot of the required work.
+       
+    BUT! If you are writing low-level code (or *implementing* a
+    synchronization primitive), then:
+
+        --you MUST ensure that the compiler is not reordering key
+        instructions.
+
+        --you MUST know the memory model (of the hardware)
+
+        --you MAY need to compensate for it, by inserting memory
+        barriers (see below).
+      
+        (moral of the story: if you're writing systems software, you
+        need to "read the manual", for both compiler and hardware.)
+
+    What's a memory barrier?
+
+        --instruction like MFENCE on the x86. example:
+
+             move $1, 0x10000   # write 1 to memory address 10000
+             move $2, 0x20000   # write 2 to memory address 20000
+             MFENCE
+             move $3, 0x10000   # write 3 to memory address 10000
+             move $4, 0x30000   # write 4 to memory address 30000
+
+        --the MFENCE here ensures that 
+            
+            the first two store instructions will both appear to other
+            CPUs to be happening before the last two (though the first
+            two may appear out of order to other CPUs, and likewise the
+            last two).
+       
+            a more technical way to put it is: The MFENCE ensures
+            that, if any memory write after the MFENCE (in program
+            order) is visible to another CPU, then that other CPU
+            also sees all memory writes before the MFENCE.
+            
+
+        --the "acquire" and "release" in mutexes need memory barriers.
+        This ensures that from the perspective of the other CPUs, all
+        memory accesses in the critical section happened AFTER acquiring
+        the lock and BEFORE releasing it.
+        
+            Exercise: convince yourself that a memory barrier in
+            acquire() and release() indeed has this effect, and that,
+            without the memory barrier, the effect is not in place.
+
+        --NOTE: on the x86, the "xchg" instruction includes an
+        implicit memory barrier. This is the reason that we use
+        xchg in the release() function of the spinlock
+        If we implemented release() as 
+            locked = 0,
+        then this operation could be reordered with respect to the
+        critical section, thereby violating mutual exclusion.
+
