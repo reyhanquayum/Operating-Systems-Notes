@@ -28,6 +28,3 @@
 * issue is when you want to access a particular offset in b, wasting time getting from a to be
 
 #### b) Linked Files
-
-
-
